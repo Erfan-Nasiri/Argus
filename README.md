@@ -435,7 +435,7 @@ If you would like to contribute to this project, feel free to fork the repositor
 ---
 
 ## License
-This project is licensed under the GNU GPL v3 License , See the LICENSE file for more details.
+This project is licensed under the GNU GPL v3 License , See the [LICENSE](https://github.com/Erfan-Nasiri/Argus/blob/main/LICENSE) file for more details.
 
 ---
 
