@@ -428,7 +428,8 @@ export ARGUS_BATCH_SIZE=50
 export ARGUS_FLUSH_INTERVAL=5
 /etc/init.d/argus restart
 ```
-
+## Contributing
+If you would like to contribute to this project, feel free to fork the repository and submit a pull request. Any improvements or additional features are welcome!
 ---
 
 ## License
