@@ -497,17 +497,7 @@ export ARGUS_FLUSH_INTERVAL=5
 /etc/init.d/argus restart
 ```
 
----
 
-## Performance
-
-**Typical Usage:**
-- Memory: 3-8 MB
-- CPU: <1% idle, 2-5% during changes
-- Storage: ~1MB per 1000 entries
-- I/O: Batched writes every 3 seconds
-
----
 
 ## License
 
