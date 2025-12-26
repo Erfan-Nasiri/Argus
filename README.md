@@ -1,4 +1,4 @@
-#  Argus
+# Project Argus
 
 **Audit Logging for OpenWrt LuCI Operations**
 
@@ -142,8 +142,8 @@ features = {
     },
     
     performance = {
-        flush_interval = 3,           -- Seconds between writes
-        batch_size = 30,              -- Events per batch
+        flush_interval = 3,
+        batch_size = 30,
         max_pending_operations = 1000,
     },
     
@@ -158,10 +158,10 @@ features = {
 ### Environment Variables
 
 ```bash
-export ARGUS_LOG_DIR=/mnt/usb/logs    # Custom log location
-export ARGUS_DEBUG=1                   # Enable debug output
-export ARGUS_FLUSH_INTERVAL=5          # Write interval (seconds)
-export ARGUS_BATCH_SIZE=50             # Events per batch
+export ARGUS_LOG_DIR=/mnt/usb/logs
+export ARGUS_DEBUG=1
+export ARGUS_FLUSH_INTERVAL=5
+export ARGUS_BATCH_SIZE=50
 ```
 
 ---
@@ -179,28 +179,24 @@ export ARGUS_BATCH_SIZE=50             # Events per batch
                 │   LuCI Web UI   │
                 └────────┬────────┘
                          │
-                         │ RPC Calls
+                         │ RPC
                          ▼
                 ┌─────────────────┐
                 │  LuCI Backend   │
                 │ (rpcd/uhttpd)   │
                 └────────┬────────┘
                          │
-                         │ IPC Messages
+                         │ IPC
                          ▼
                 ┌─────────────────┐
                 │      ubus       │
                 │  (Message Bus)  │
-                │                 │
-                │  luci.*, uci.*  │
-                │  service.*, etc │
                 └────────┬────────┘
                          │
-                         │ ubus monitor
+                         │ monitor
                          ▼
               ╔══════════════════════╗
               ║   Project Argus      ║
-              ║   logger-engine.lua  ║
               ╚══════════╤═══════════╝
                          │
             ┌────────────┼────────────┐
@@ -211,51 +207,34 @@ export ARGUS_BATCH_SIZE=50             # Events per batch
 ### Processing Pipeline
 
 ```
-    ubus monitor stream
+    ubus monitor
             │
             ▼
-    ┌───────────────┐
-    │ User Filter   │  Keep user operations only
-    └───────┬───────┘
+    User Filter → Keep user operations only
             │
             ▼
-    ┌───────────────┐
-    │ JSON Parser   │  Extract structured data
-    └───────┬───────┘  Map objid → objpath
+    JSON Parser → Extract data, map objid to objpath
             │
             ▼
-    ┌───────────────┐
-    │  Classifier   │  uci_change, auth_login,
-    └───────┬───────┘  exec, reboot, etc.
+    Classifier → uci_change, auth_login, exec, etc.
             │
-            ├──► Direct Operations → Log immediately
+            ├──► Direct ops → Log now
             │
-            └──► UCI Changes → Stage in session
+            └──► UCI changes → Stage in session
                        │
                        ▼
-              ┌─────────────────┐
-              │  Before/After   │  Query current state
-              │  State Capture  │  Store before→after
-              └────────┬────────┘
+              Before/After Capture → Query UCI, store values
                        │
-                       │ Wait for uci.apply...
+                       │ Wait for commit...
                        │
                        ▼
-              ┌─────────────────┐
-              │  uci.apply      │  Trigger detected!
-              │  Detected       │  Bundle all changes
-              └────────┬────────┘
+              uci.apply detected → Bundle changes
                        │
                        ▼
-              ┌─────────────────┐
-              │   Formatter     │  Resolve CFGIDs
-              │  (Translator)   │  Generate description
-              └────────┬────────┘
+              Formatter → Resolve CFGIDs, generate text
                        │
                        ▼
-              ┌─────────────────┐
-              │  Batch Writer   │  Write to logs
-              └─────────────────┘
+              Batch Writer → Write logs
                        │
             ┌──────────┼──────────┐
             ▼          ▼          ▼
@@ -264,116 +243,87 @@ export ARGUS_BATCH_SIZE=50             # Events per batch
 
 ### Event Flow Example
 
-**Scenario: Admin changes LAN IP from 192.168.1.1 to 192.168.2.1**
+**Admin changes LAN IP from 192.168.1.1 to 192.168.2.1**
 
-**Step 1: User Action**
 ```
-Admin opens LuCI web interface and navigates to Network → Interfaces → LAN
-Changes IPv4 address field from 192.168.1.1 to 192.168.2.1
-Clicks "Save & Apply" button
-```
-
-**Step 2: ubus Message (uci.set)**
-```
-LuCI sends ubus invoke message:
-  Object: uci
-  Method: set
-  User: admin
-  Data: {
-    config: "network",
-    section: "lan",
-    values: {ipaddr: "192.168.2.1"},
-    ubus_rpc_session: "4a89bc3f"
-  }
-
-ubus responds with status: 0 (success)
-```
-
-**Step 3: Argus Stages the Change**
-```
-Argus receives and processes the message:
-  - Classifies as: uci_change
-  - Links callback to session 4a89bc3f
-  - Queries current value: uci get network.lan.ipaddr → "192.168.1.1"
-  - Stores in memory:
-      session: 4a89bc3f
-      config: network
-      section: lan
-      field: ipaddr
-      before: "192.168.1.1"
-      after: "192.168.2.1"
-  
-  Does NOT log yet - waits for commit
-```
-
-**Step 4: ubus Message (uci.apply)**
-```
-LuCI sends ubus invoke message:
-  Object: uci
-  Method: apply
-  User: admin
-  Data: {
-    rollback: true,
-    ubus_rpc_session: "4a89bc3f"
-  }
-
-ubus responds with status: 0 (success)
-```
-
-**Step 5: Argus Triggers Logging**
-```
-Argus detects uci.apply:
-  - Classifies as: uci_apply
-  - Retrieves all staged changes for session 4a89bc3f
-  - Groups changes by config file (network)
-  - Sends to formatter module
-```
-
-**Step 6: Formatter Generates Description**
-```
-Formatter processes the change:
-  - Resolves section "lan" → "interface 'lan'"
-  - Builds natural language description
-  - Output: "Applied network changes: modified interface 'lan' 
-            (changed ipaddr from '192.168.1.1' to '192.168.2.1')"
-```
-
-**Step 7: Multi-Format Output**
-```
-format.log:
-  Wed Dec 25 14:32:18 2024 [user: admin] Applied network changes: 
-  modified interface 'lan' (changed ipaddr from '192.168.1.1' to '192.168.2.1')
-
-audit.log:
-  time="Wed Dec 25 14:32:18 2024" user="admin" action="set_applied" 
-  category="uci" config="network" values="section=lan,field=ipaddr,
-  before=192.168.1.1,after=192.168.2.1"
-
-audit.json:
-  {
-    "timestamp": "2024-12-25T14:32:18Z",
-    "user": "admin",
-    "action": "set_applied",
-    "config": "network",
-    "changes": [{
-      "section": "lan",
-      "field": "ipaddr",
-      "before": "192.168.1.1",
-      "after": "192.168.2.1"
-    }]
-  }
+┌─────────────────────────────────────────────┐
+│ Step 1: User Action                         │
+├─────────────────────────────────────────────┤
+│ LuCI: Network → Interfaces → LAN            │
+│ Change IP: 192.168.1.1 → 192.168.2.1        │
+│ Click: "Save & Apply"                       │
+└─────────────────────────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│ Step 2: ubus invoke (uci.set)              │
+├─────────────────────────────────────────────┤
+│ {                                           │
+│   user: "admin",                            │
+│   method: "set",                            │
+│   config: "network",                        │
+│   section: "lan",                           │
+│   values: {ipaddr: "192.168.2.1"},          │
+│   session: "4a89bc3f"                       │
+│ }                                           │
+│ Status: 0                                   │
+└─────────────────────────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│ Step 3: Argus stages change                │
+├─────────────────────────────────────────────┤
+│ Classification: uci_change                  │
+│ Query: uci get network.lan.ipaddr           │
+│ Result: "192.168.1.1"                       │
+│                                             │
+│ Store in session 4a89bc3f:                  │
+│   before: 192.168.1.1                       │
+│   after: 192.168.2.1                        │
+│                                             │
+│ Wait for commit (no log yet)                │
+└─────────────────────────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│ Step 4: ubus invoke (uci.apply)            │
+├─────────────────────────────────────────────┤
+│ {                                           │
+│   user: "admin",                            │
+│   method: "apply",                          │
+│   rollback: true,                           │
+│   session: "4a89bc3f"                       │
+│ }                                           │
+│ Status: 0                                   │
+└─────────────────────────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│ Step 5: Argus processes commit              │
+├─────────────────────────────────────────────┤
+│ Classification: uci_apply                   │
+│ Retrieve staged changes for 4a89bc3f        │
+│ Send to formatter                           │
+└─────────────────────────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│ Step 6: Format and write                    │
+├─────────────────────────────────────────────┤
+│ Output:                                     │
+│ "Applied network changes: modified          │
+│  interface 'lan' (changed ipaddr from       │
+│  '192.168.1.1' to '192.168.2.1')"           │
+│                                             │
+│ Written to all log files                    │
+└─────────────────────────────────────────────┘
 ```
 
 ### Core Components
 
 | Component | Purpose |
 |-----------|---------|
-| **logger-engine.lua** | Main event loop, state management, coordination |
-| **event_pipeline.lua** | Event classification, filtering, triage logic |
-| **before_after.lua** | UCI state capture, before/after tracking |
-| **formatter/init.lua** | Natural language generation, CFGID resolution |
-| **uci_interface.lua** | Shell-based UCI queries (get, show, dump) |
-| **config.lua** | Configuration management, mode profiles |
+| **logger-engine.lua** | Main event loop, state management |
+| **event_pipeline.lua** | Event classification and filtering |
+| **before_after.lua** | UCI state capture and tracking |
+| **formatter/init.lua** | Natural language generation |
+| **uci_interface.lua** | Shell-based UCI queries |
+| **config.lua** | Configuration management |
 
 ---
 
@@ -458,60 +408,51 @@ Wed Dec 25 14:15:25 2024 [user: admin] Authentication successful: login from 192
 ### Service Not Starting
 
 ```bash
-# Check status
 /etc/init.d/argus status
-
-# View system logs
 logread | grep argus
-
-# Test ubus monitor
 ubus monitor -m invoke -m status
 ```
 
 ### No Logs Generated
 
 ```bash
-# Enable debug mode
 export ARGUS_DEBUG=1
 /etc/init.d/argus restart
-
-# Check debug output
 tail -f /tmp/log/Audits/debug.log
-
-# Verify directory
 mkdir -p /tmp/log/Audits
 ```
 
 ### High Memory Usage
 
 ```bash
-# Switch to minimal mode
 # Edit /usr/lib/argus/engine/config.lua
 operation_mode = "minimal"
 
-# Reduce batch size
 export ARGUS_BATCH_SIZE=50
 export ARGUS_FLUSH_INTERVAL=5
-
-# Restart
 /etc/init.d/argus restart
 ```
 
+---
 
+## Performance
+
+- Memory: 3-8 MB
+- CPU: <1% idle, 2-5% active
+- Storage: ~1MB per 1000 entries
+- I/O: Batched writes every 3 seconds
+
+---
 
 ## License
 
-MIT License - see LICENSE file
+MIT License
 
 ---
 
 ## Links
 
-- **Repository**: https://github.com/Erfan-Nasiri/Argus
-- **Issues**: https://github.com/Erfan-Nasiri/Argus/issues
-- **OpenWrt**: https://openwrt.org/
-- **ubus**: https://openwrt.org/docs/techref/ubus
-
----
-
-** Argus** - Audit logging for OpenWrt LuCI operations
+- Repository: https://github.com/Erfan-Nasiri/Argus
+- Issues: https://github.com/Erfan-Nasiri/Argus/issues
+- OpenWrt: https://openwrt.org/
+- ubus: https://openwrt.org/docs/techref/ubus
