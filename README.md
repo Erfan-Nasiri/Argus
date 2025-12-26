@@ -152,11 +152,6 @@ features = {
         max_failed_attempts = 5,
         lockout_window_seconds = 900,
     },
-    
-    state = {
-        session_ttl = 600,            -- 10 minute timeout
-        cleanup_interval = 60,
-    },
 }
 ```
 
@@ -167,159 +162,212 @@ export ARGUS_LOG_DIR=/mnt/usb/logs    # Custom log location
 export ARGUS_DEBUG=1                   # Enable debug output
 export ARGUS_FLUSH_INTERVAL=5          # Write interval (seconds)
 export ARGUS_BATCH_SIZE=50             # Events per batch
-export ARGUS_BLOCK_USER=monitoring     # Exclude specific user
 ```
 
 ---
 
 ## Architecture
 
-### System Flow
+### System Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                  OpenWrt Web Interface                   │
-│                                                           │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │              LuCI Web UI                         │    │
-│  │  User logs in, modifies settings                │    │
-│  └──────────────────┬──────────────────────────────┘    │
-│                     │ HTTP/HTTPS                         │
-│                     ▼                                    │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │         LuCI RPC Backend                         │    │
-│  │  Handles auth, translates UI to ubus            │    │
-│  └──────────────────┬──────────────────────────────┘    │
-│                     │                                    │
-│                     ▼                                    │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │              ubus (Unified Bus)                  │    │
-│  │  • luci.* (auth, session)                        │    │
-│  │  • uci.* (config staging, commit)                │    │
-│  │  • service.* (start, stop, restart)              │    │
-│  │  • system.* (reboot, upgrade)                    │    │
-│  └──────────────────┬──────────────────────────────┘    │
-│                     │ ubus monitor stream                │
-└─────────────────────┼────────────────────────────────────┘
-                      │
-┌─────────────────────▼────────────────────────────────────┐
-│                 Project Argus                            │
-│                                                           │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │      logger-engine.lua (Main Engine)             │   │
-│  │                                                    │   │
-│  │  1. Fast User Filter                              │   │
-│  │     → Keep only user-initiated events             │   │
-│  │                                                    │   │
-│  │  2. JSON Parser & Event Builder                   │   │
-│  │     → Extract structured data                     │   │
-│  │     → Map objid → objpath                         │   │
-│  │                                                    │   │
-│  │  3. Event Pipeline (Triage)                       │   │
-│  │     → Classify operation types                    │   │
-│  │     → Filter noise                                │   │
-│  │                                                    │   │
-│  │  4. Session State Correlation                     │   │
-│  │     → Track ubus_rpc_session → user              │   │
-│  │     → Stage UCI changes per session               │   │
-│  │                                                    │   │
-│  │  5. Before/After Capture (via UCI)                │   │
-│  │     → Query current values                        │   │
-│  │     → Store before/after pairs                    │   │
-│  │                                                    │   │
-│  │  6. Commit Trigger → Log Generation               │   │
-│  │     → Detect uci.apply                            │   │
-│  │     → Bundle staged changes                       │   │
-│  │     → Generate log entries                        │   │
-│  └──────────────────┬───────────────────────────────┘   │
-│                     │                                    │
-│  ┌──────────────────▼───────────────────────────────┐   │
-│  │    formatter/init.lua (Translator)               │   │
-│  │                                                    │   │
-│  │  → Resolve CFGIDs (cfg01411c → "Allow-SSH")      │   │
-│  │  → Group changes by section                       │   │
-│  │  → Generate natural language                      │   │
-│  │  → Translate technical values                     │   │
-│  └──────────────────┬───────────────────────────────┘   │
-│                     │                                    │
-│  ┌──────────────────▼───────────────────────────────┐   │
-│  │         Multi-Format Output                      │   │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐         │   │
-│  │  │  Human   │ │ Key-Val  │ │   JSON   │         │   │
-│  │  │ format   │ │  audit   │ │  audit   │         │   │
-│  │  │  .log    │ │   .log   │ │  .json   │         │   │
-│  │  └──────────┘ └──────────┘ └──────────┘         │   │
-│  └───────────────────────────────────────────────────┘   │
-└───────────────────────────────────────────────────────────┘
+                    User Browser
+                         │
+                         │ HTTPS
+                         ▼
+                ┌─────────────────┐
+                │   LuCI Web UI   │
+                └────────┬────────┘
+                         │
+                         │ RPC Calls
+                         ▼
+                ┌─────────────────┐
+                │  LuCI Backend   │
+                │ (rpcd/uhttpd)   │
+                └────────┬────────┘
+                         │
+                         │ IPC Messages
+                         ▼
+                ┌─────────────────┐
+                │      ubus       │
+                │  (Message Bus)  │
+                │                 │
+                │  luci.*, uci.*  │
+                │  service.*, etc │
+                └────────┬────────┘
+                         │
+                         │ ubus monitor
+                         ▼
+              ╔══════════════════════╗
+              ║   Project Argus      ║
+              ║   logger-engine.lua  ║
+              ╚══════════╤═══════════╝
+                         │
+            ┌────────────┼────────────┐
+            ▼            ▼            ▼
+       format.log   audit.log   audit.json
+```
+
+### Processing Pipeline
+
+```
+    ubus monitor stream
+            │
+            ▼
+    ┌───────────────┐
+    │ User Filter   │  Keep user operations only
+    └───────┬───────┘
+            │
+            ▼
+    ┌───────────────┐
+    │ JSON Parser   │  Extract structured data
+    └───────┬───────┘  Map objid → objpath
+            │
+            ▼
+    ┌───────────────┐
+    │  Classifier   │  uci_change, auth_login,
+    └───────┬───────┘  exec, reboot, etc.
+            │
+            ├──► Direct Operations → Log immediately
+            │
+            └──► UCI Changes → Stage in session
+                       │
+                       ▼
+              ┌─────────────────┐
+              │  Before/After   │  Query current state
+              │  State Capture  │  Store before→after
+              └────────┬────────┘
+                       │
+                       │ Wait for uci.apply...
+                       │
+                       ▼
+              ┌─────────────────┐
+              │  uci.apply      │  Trigger detected!
+              │  Detected       │  Bundle all changes
+              └────────┬────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │   Formatter     │  Resolve CFGIDs
+              │  (Translator)   │  Generate description
+              └────────┬────────┘
+                       │
+                       ▼
+              ┌─────────────────┐
+              │  Batch Writer   │  Write to logs
+              └─────────────────┘
+                       │
+            ┌──────────┼──────────┐
+            ▼          ▼          ▼
+       format.log  audit.log  audit.json
 ```
 
 ### Event Flow Example
 
-**Admin changes LAN IP via web interface:**
+**Admin changes LAN IP: 192.168.1.1 → 192.168.2.1**
 
 ```
-1. User Action in LuCI:
-   → Navigate to Network → Interfaces → LAN → Edit
-   → Change IPv4: 192.168.1.1 → 192.168.2.1
-   → Click "Save & Apply"
-
-2. LuCI RPC Backend:
-   → Creates session (ubus_rpc_session: 4a89bc3f)
-   → Maps session → user: admin
-
-3. UCI Staging (via ubus):
-   invoke: {"user":"admin", "method":"set", "object":"uci",
-            "data":{"config":"network", "section":"lan",
-                    "values":{"ipaddr":"192.168.2.1"},
-                    "ubus_rpc_session":"4a89bc3f"}}
-   status: {"status":0}
-
-4. Argus Processing:
-   → Classified as "uci_change"
-   → Capture before: 192.168.1.1
-   → Stage in session 4a89bc3f
-   → Wait for commit
-
-5. UCI Commit (via ubus):
-   invoke: {"user":"admin", "method":"apply", "object":"uci",
-            "data":{"rollback":true, "ubus_rpc_session":"4a89bc3f"}}
-   status: {"status":0}
-
-6. Argus Trigger:
-   → Classified as "uci_apply"
-   → Bundle all session 4a89bc3f changes
-   → Send to formatter
-
-7. Formatter Output:
-   → Resolve "lan" → "LAN Interface"
-   → Generate: "Applied network changes: modified interface 
-      'lan' (changed ipaddr from '192.168.1.1' to '192.168.2.1')"
-
-8. Multi-Format Logging:
-   → format.log: Human-readable with timestamp + user
-   → audit.log: Structured key-value pairs
-   → audit.json: Full JSON with details
+┌─────────────────────────────────────────────┐
+│ 1. User Action in LuCI                      │
+├─────────────────────────────────────────────┤
+│ Navigate: Network → Interfaces → LAN        │
+│ Change: 192.168.1.1 → 192.168.2.1           │
+│ Click: "Save & Apply"                       │
+└──────────────────┬──────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────┐
+│ 2. LuCI → ubus: uci.set                     │
+├─────────────────────────────────────────────┤
+│ invoke: {                                   │
+│   user: "admin",                            │
+│   method: "set",                            │
+│   config: "network",                        │
+│   section: "lan",                           │
+│   values: {ipaddr: "192.168.2.1"},          │
+│   session: "4a89bc3f"                       │
+│ }                                           │
+│ status: 0 ✓                                 │
+└──────────────────┬──────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────┐
+│ 3. Argus: Stage Change                      │
+├─────────────────────────────────────────────┤
+│ Classification: uci_change                  │
+│                                             │
+│ Query before state:                         │
+│   $ uci get network.lan.ipaddr              │
+│   → "192.168.1.1"                           │
+│                                             │
+│ Stage in session 4a89bc3f:                  │
+│   {config: network, section: lan,           │
+│    field: ipaddr,                           │
+│    before: "192.168.1.1",                   │
+│    after: "192.168.2.1"}                    │
+│                                             │
+│ ⚠️  WAIT - don't log yet                    │
+└──────────────────┬──────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────┐
+│ 4. LuCI → ubus: uci.apply                   │
+├─────────────────────────────────────────────┤
+│ invoke: {                                   │
+│   user: "admin",                            │
+│   method: "apply",                          │
+│   rollback: true,                           │
+│   session: "4a89bc3f"                       │
+│ }                                           │
+│ status: 0 ✓                                 │
+└──────────────────┬──────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────┐
+│ 5. Argus: Trigger & Format                  │
+├─────────────────────────────────────────────┤
+│ Classification: uci_apply                   │
+│                                             │
+│ 🚨 TRIGGER!                                 │
+│ Retrieve staged changes for session         │
+│                                             │
+│ Formatter:                                  │
+│   Resolve "lan" → "interface 'lan'"         │
+│   Generate description                      │
+│                                             │
+│ Output:                                     │
+│   "Applied network changes: modified        │
+│    interface 'lan' (changed ipaddr from     │
+│    '192.168.1.1' to '192.168.2.1')"         │
+└──────────────────┬──────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────┐
+│ 6. Write to Logs                            │
+├─────────────────────────────────────────────┤
+│ format.log:                                 │
+│   Wed Dec 25 14:32:18 2024 [user: admin]   │
+│   Applied network changes: modified...      │
+│                                             │
+│ audit.log:                                  │
+│   time="..." user="admin"                   │
+│   action="set_applied" config="network"...  │
+│                                             │
+│ audit.json:                                 │
+│   {"timestamp":"...","user":"admin",...}    │
+└─────────────────────────────────────────────┘
 ```
 
-### Components
+### Core Components
 
-#### **logger-engine.lua**
-Main event processor that monitors ubus stream, filters user operations, correlates sessions, and coordinates before/after capture.
-
-#### **engine/event_pipeline.lua**
-Event classification module that builds event objects, applies fast filtering, and triages operations into types (uci_change, auth_login, etc.).
-
-#### **engine/config.lua**
-Configuration management with mode profiles, environment variable overrides, and output path resolution.
-
-#### **engine-modules/before_after.lua**
-State tracking module that captures UCI configuration before operations, stores per-session state, and performs field-level analysis.
-
-#### **engine-modules/uci_interface.lua**
-Shell-based UCI query interface providing get(), set(), commit(), and dump() operations without libuci-lua dependency.
-
-#### **formatter/init.lua**
-Natural language translator that resolves anonymous section IDs, groups changes, translates technical values, and generates descriptions.
+| Component | Purpose |
+|-----------|---------|
+| **logger-engine.lua** | Main event loop, state management, coordination |
+| **event_pipeline.lua** | Event classification, filtering, triage logic |
+| **before_after.lua** | UCI state capture, before/after tracking |
+| **formatter/init.lua** | Natural language generation, CFGID resolution |
+| **uci_interface.lua** | Shell-based UCI queries (get, show, dump) |
+| **config.lua** | Configuration management, mode profiles |
 
 ---
 
@@ -443,18 +491,17 @@ export ARGUS_FLUSH_INTERVAL=5
 /etc/init.d/argus restart
 ```
 
-### Missing Events
-
-```bash
-# Check mode configuration
-grep "operation_mode" /usr/lib/argus/engine/config.lua
-
-# Switch to forensic for maximum capture
-operation_mode = "forensic"
-```
-
 ---
 
+## Performance
+
+**Typical Usage:**
+- Memory: 3-8 MB
+- CPU: <1% idle, 2-5% during changes
+- Storage: ~1MB per 1000 entries
+- I/O: Batched writes every 3 seconds
+
+---
 
 ## License
 
@@ -471,4 +518,4 @@ MIT License - see LICENSE file
 
 ---
 
-**Project Argus** - Audit logging for OpenWrt LuCI operations
+** Argus** - Audit logging for OpenWrt LuCI operations
