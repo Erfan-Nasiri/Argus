@@ -2,7 +2,7 @@
 
 **Audit Logging for OpenWrt LuCI Operations**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Lua 5.1](https://img.shields.io/badge/Lua-5.1-blue.svg)](https://www.lua.org/)
 [![OpenWrt](https://img.shields.io/badge/OpenWrt-19.07+-orange.svg)](https://openwrt.org/)
 
