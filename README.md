@@ -435,8 +435,7 @@ If you would like to contribute to this project, feel free to fork the repositor
 ---
 
 ## License
-
-MIT License
+This project is licensed under the GNU GPL v3 License , See the LICENSE file for more details.
 
 ---
 
