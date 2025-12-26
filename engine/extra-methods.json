@@ -1,0 +1,46 @@
+-[[
+
+Then the engine sees luci-rpc.getDHCPLeases,
+  triage_operation now returns type =
+  "dhcp_leases_read". Later, when the status
+  callback succeeds, you can map that type to an
+  action/category like any other:
+
+  elseif operation.type == "dhcp_leases_read" then
+      operation.action   = "getDHCPLeases"
+      operation.category = "network"
+      operation.config   = "dhcp"
+      create_log_entries_for_operation(operation)
+
+  Resulting KV log line (typical):
+
+  Thu Nov 13 12:15:12 2025 [user: root]
+  action=getDHCPLeases category=network
+  config=dhcp result=success
+
+  Same idea for luci-rpc.getSystemStat (map to
+  action="getSystemStat" and category system) or
+  your myapp_action.
+
+  ### Quick comment you can add above the override
+  block
+
+  -- Example: extend triage for luci-rpc + custom
+  services
+  -- Each key is "object.method"; value is the
+  internal type the engine should log.
+
+  
+  triage = {
+      extra_types = {
+          ["luci-rpc.getDHCPLeases"] =
+  "dhcp_leases_read",
+          ["luci-rpc.getSystemStat"] =
+  "system_stat_read",
+          ["myapp.doSomething"]      =
+  "myapp_action",
+      }
+  }
+
+
+--]]
