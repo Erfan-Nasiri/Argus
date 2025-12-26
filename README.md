@@ -264,98 +264,104 @@ export ARGUS_BATCH_SIZE=50             # Events per batch
 
 ### Event Flow Example
 
-**Admin changes LAN IP: 192.168.1.1 → 192.168.2.1**
+**Scenario: Admin changes LAN IP from 192.168.1.1 to 192.168.2.1**
 
+**Step 1: User Action**
 ```
-┌─────────────────────────────────────────────┐
-│ 1. User Action in LuCI                      │
-├─────────────────────────────────────────────┤
-│ Navigate: Network → Interfaces → LAN        │
-│ Change: 192.168.1.1 → 192.168.2.1           │
-│ Click: "Save & Apply"                       │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│ 2. LuCI → ubus: uci.set                     │
-├─────────────────────────────────────────────┤
-│ invoke: {                                   │
-│   user: "admin",                            │
-│   method: "set",                            │
-│   config: "network",                        │
-│   section: "lan",                           │
-│   values: {ipaddr: "192.168.2.1"},          │
-│   session: "4a89bc3f"                       │
-│ }                                           │
-│ status: 0 ✓                                 │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│ 3. Argus: Stage Change                      │
-├─────────────────────────────────────────────┤
-│ Classification: uci_change                  │
-│                                             │
-│ Query before state:                         │
-│   $ uci get network.lan.ipaddr              │
-│   → "192.168.1.1"                           │
-│                                             │
-│ Stage in session 4a89bc3f:                  │
-│   {config: network, section: lan,           │
-│    field: ipaddr,                           │
-│    before: "192.168.1.1",                   │
-│    after: "192.168.2.1"}                    │
-│                                             │
-│ ⚠️  WAIT - don't log yet                    │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│ 4. LuCI → ubus: uci.apply                   │
-├─────────────────────────────────────────────┤
-│ invoke: {                                   │
-│   user: "admin",                            │
-│   method: "apply",                          │
-│   rollback: true,                           │
-│   session: "4a89bc3f"                       │
-│ }                                           │
-│ status: 0 ✓                                 │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│ 5. Argus: Trigger & Format                  │
-├─────────────────────────────────────────────┤
-│ Classification: uci_apply                   │
-│                                             │
-│ 🚨 TRIGGER!                                 │
-│ Retrieve staged changes for session         │
-│                                             │
-│ Formatter:                                  │
-│   Resolve "lan" → "interface 'lan'"         │
-│   Generate description                      │
-│                                             │
-│ Output:                                     │
-│   "Applied network changes: modified        │
-│    interface 'lan' (changed ipaddr from     │
-│    '192.168.1.1' to '192.168.2.1')"         │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────┐
-│ 6. Write to Logs                            │
-├─────────────────────────────────────────────┤
-│ format.log:                                 │
-│   Wed Dec 25 14:32:18 2024 [user: admin]   │
-│   Applied network changes: modified...      │
-│                                             │
-│ audit.log:                                  │
-│   time="..." user="admin"                   │
-│   action="set_applied" config="network"...  │
-│                                             │
-│ audit.json:                                 │
-│   {"timestamp":"...","user":"admin",...}    │
-└─────────────────────────────────────────────┘
+Admin opens LuCI web interface and navigates to Network → Interfaces → LAN
+Changes IPv4 address field from 192.168.1.1 to 192.168.2.1
+Clicks "Save & Apply" button
+```
+
+**Step 2: ubus Message (uci.set)**
+```
+LuCI sends ubus invoke message:
+  Object: uci
+  Method: set
+  User: admin
+  Data: {
+    config: "network",
+    section: "lan",
+    values: {ipaddr: "192.168.2.1"},
+    ubus_rpc_session: "4a89bc3f"
+  }
+
+ubus responds with status: 0 (success)
+```
+
+**Step 3: Argus Stages the Change**
+```
+Argus receives and processes the message:
+  - Classifies as: uci_change
+  - Links callback to session 4a89bc3f
+  - Queries current value: uci get network.lan.ipaddr → "192.168.1.1"
+  - Stores in memory:
+      session: 4a89bc3f
+      config: network
+      section: lan
+      field: ipaddr
+      before: "192.168.1.1"
+      after: "192.168.2.1"
+  
+  Does NOT log yet - waits for commit
+```
+
+**Step 4: ubus Message (uci.apply)**
+```
+LuCI sends ubus invoke message:
+  Object: uci
+  Method: apply
+  User: admin
+  Data: {
+    rollback: true,
+    ubus_rpc_session: "4a89bc3f"
+  }
+
+ubus responds with status: 0 (success)
+```
+
+**Step 5: Argus Triggers Logging**
+```
+Argus detects uci.apply:
+  - Classifies as: uci_apply
+  - Retrieves all staged changes for session 4a89bc3f
+  - Groups changes by config file (network)
+  - Sends to formatter module
+```
+
+**Step 6: Formatter Generates Description**
+```
+Formatter processes the change:
+  - Resolves section "lan" → "interface 'lan'"
+  - Builds natural language description
+  - Output: "Applied network changes: modified interface 'lan' 
+            (changed ipaddr from '192.168.1.1' to '192.168.2.1')"
+```
+
+**Step 7: Multi-Format Output**
+```
+format.log:
+  Wed Dec 25 14:32:18 2024 [user: admin] Applied network changes: 
+  modified interface 'lan' (changed ipaddr from '192.168.1.1' to '192.168.2.1')
+
+audit.log:
+  time="Wed Dec 25 14:32:18 2024" user="admin" action="set_applied" 
+  category="uci" config="network" values="section=lan,field=ipaddr,
+  before=192.168.1.1,after=192.168.2.1"
+
+audit.json:
+  {
+    "timestamp": "2024-12-25T14:32:18Z",
+    "user": "admin",
+    "action": "set_applied",
+    "config": "network",
+    "changes": [{
+      "section": "lan",
+      "field": "ipaddr",
+      "before": "192.168.1.1",
+      "after": "192.168.2.1"
+    }]
+  }
 ```
 
 ### Core Components
