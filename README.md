@@ -1,4 +1,4 @@
-# Project Argus
+#  Argus
 
 **Audit Logging for OpenWrt LuCI Operations**
 
@@ -36,10 +36,6 @@ OpenWrt's LuCI web interface communicates with the system through **ubus** (unif
 - Generates human-readable log entries
 - Correlates multi-step operations within web sessions
 
-**What it doesn't do:**
-- Monitor direct SSH/CLI commands (only LuCI operations)
-- Prevent or block unauthorized changes
-- Provide real-time alerts
 
 ---
 
@@ -432,15 +428,6 @@ export ARGUS_BATCH_SIZE=50
 export ARGUS_FLUSH_INTERVAL=5
 /etc/init.d/argus restart
 ```
-
----
-
-## Performance
-
-- Memory: 3-8 MB
-- CPU: <1% idle, 2-5% active
-- Storage: ~1MB per 1000 entries
-- I/O: Batched writes every 3 seconds
 
 ---
 
