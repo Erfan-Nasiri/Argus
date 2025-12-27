@@ -387,47 +387,6 @@ Wed Dec 25 15:45:20 2024 [user: admin] Applied firewall changes: added new port 
 Wed Dec 25 16:00:15 2024 [user: admin] Applied dhcp changes: added new static lease 'server' (mac=aa:bb:cc:dd:ee:ff, ip=192.168.1.100)
 ```
 
-### Authentication Events
-
-**Action:** Login attempts
-
-**Log:**
-```
-Wed Dec 25 14:15:03 2024 [user: admin] Authentication failed: login attempt from 192.168.1.50
-Wed Dec 25 14:15:25 2024 [user: admin] Authentication successful: login from 192.168.1.50
-```
-
----
-
-## Troubleshooting
-
-### Service Not Starting
-
-```bash
-/etc/init.d/argus status
-logread | grep argus
-ubus monitor -m invoke -m status
-```
-
-### No Logs Generated
-
-```bash
-export ARGUS_DEBUG=1
-/etc/init.d/argus restart
-tail -f /tmp/log/Audits/debug.log
-mkdir -p /tmp/log/Audits
-```
-
-### High Memory Usage
-
-```bash
-# Edit /usr/lib/argus/engine/config.lua
-operation_mode = "minimal"
-
-export ARGUS_BATCH_SIZE=50
-export ARGUS_FLUSH_INTERVAL=5
-/etc/init.d/argus restart
-```
 ## Contributing
 
 If you would like to contribute to this project, feel free to fork the repository and submit a pull request. Any improvements or additional features are welcome!
