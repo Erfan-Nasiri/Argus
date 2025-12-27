@@ -3,7 +3,7 @@
 -- ==============================================================================
 -- Goals:
 --   - Simple, readable configuration
---   - Backwards-compatible with logger-engine.lua
+--  
 --   - No deep merging, no mode profiles, no hot reload
 -- ==============================================================================
 
@@ -100,7 +100,7 @@ local config = {
         noise_hints = nil,
     },
 
-    -- Simple module registry (rarely used, but cheap to keep)
+    -- Simple module registry 
     modules = {},
 
     -- Runtime state (minimal, but keeps shape that engine expects)
