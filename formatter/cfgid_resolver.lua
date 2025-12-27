@@ -843,7 +843,7 @@ end
 -- ==============================================================================
 
 local cache_system_interface = {
-    -- 🔑 KEY FUNCTION: Pre-cache resolution BEFORE deletion
+    
     pre_cache_resolution = function(config, cfgid, resolved_name, section_data)
         local cache_key = config .. ":" .. cfgid
         cache_system.pre_resolution.data[cache_key] = {
