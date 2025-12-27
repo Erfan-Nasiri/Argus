@@ -2,9 +2,6 @@
 -- formatter/cfgid_resolver.lua - FINAL Intelligent CFGID Resolution System
 -- ==============================================================================
 -- Purpose: Resolve cryptic UCI CFGIDs (cfg04eb36) to human-readable names
--- Features: 95%+ reliability, pre-resolution caching, multi-strategy resolution
--- Author: Production-ready with comprehensive error handling and optimization
--- Version: 2.0.0 - FINAL with pre-resolution caching for deleted sections
 -- ==============================================================================
 
 local M = {}
@@ -59,7 +56,7 @@ local CONFIG = {
     pre_resolution_ttl = 3600,          -- 1 hour for deleted sections (KEY FEATURE)
     
     -- Performance settings
-    enable_pre_resolution_cache = true,  -- 🔑 KEY for 95% reliability
+    enable_pre_resolution_cache = true,  --  KEY for 95% reliability
     enable_pattern_learning = true,      -- Learn from successful resolutions
     enable_session_tracking = true,      -- Track CFGIDs within sessions
     enable_content_analysis = true,      -- Intelligent section analysis
