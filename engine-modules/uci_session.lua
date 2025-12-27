@@ -1,4 +1,3 @@
--- filepath: /openwrt-argus-logger/openwrt-argus-logger/src/modules/uci_session.lua
 -- ==============================================================================
 -- UCI Session Management Module
 -- ==============================================================================
