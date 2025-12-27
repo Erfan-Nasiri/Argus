@@ -235,79 +235,8 @@ export ARGUS_BATCH_SIZE=50
             ┌──────────┼──────────┐
             ▼          ▼          ▼
        format.log  audit.log  audit.json
-```
 
-### Event Flow Example
 
-**Admin changes LAN IP from 192.168.1.1 to 192.168.2.1**
-
-```
-┌─────────────────────────────────────────────┐
-│ Step 1: User Action                         │
-├─────────────────────────────────────────────┤
-│ LuCI: Network → Interfaces → LAN            │
-│ Change IP: 192.168.1.1 → 192.168.2.1        │
-│ Click: "Save & Apply"                       │
-└─────────────────────────────────────────────┘
-                   ↓
-┌─────────────────────────────────────────────┐
-│ Step 2: ubus invoke (uci.set)              │
-├─────────────────────────────────────────────┤
-│ {                                           │
-│   user: "admin",                            │
-│   method: "set",                            │
-│   config: "network",                        │
-│   section: "lan",                           │
-│   values: {ipaddr: "192.168.2.1"},          │
-│   session: "4a89bc3f"                       │
-│ }                                           │
-│ Status: 0                                   │
-└─────────────────────────────────────────────┘
-                   ↓
-┌─────────────────────────────────────────────┐
-│ Step 3: Argus stages change                │
-├─────────────────────────────────────────────┤
-│ Classification: uci_change                  │
-│ Query: uci get network.lan.ipaddr           │
-│ Result: "192.168.1.1"                       │
-│                                             │
-│ Store in session 4a89bc3f:                  │
-│   before: 192.168.1.1                       │
-│   after: 192.168.2.1                        │
-│                                             │
-│ Wait for commit (no log yet)                │
-└─────────────────────────────────────────────┘
-                   ↓
-┌─────────────────────────────────────────────┐
-│ Step 4: ubus invoke (uci.apply)            │
-├─────────────────────────────────────────────┤
-│ {                                           │
-│   user: "admin",                            │
-│   method: "apply",                          │
-│   rollback: true,                           │
-│   session: "4a89bc3f"                       │
-│ }                                           │
-│ Status: 0                                   │
-└─────────────────────────────────────────────┘
-                   ↓
-┌─────────────────────────────────────────────┐
-│ Step 5: Argus processes commit              │
-├─────────────────────────────────────────────┤
-│ Classification: uci_apply                   │
-│ Retrieve staged changes for 4a89bc3f        │
-│ Send to formatter                           │
-└─────────────────────────────────────────────┘
-                   ↓
-┌─────────────────────────────────────────────┐
-│ Step 6: Format and write                    │
-├─────────────────────────────────────────────┤
-│ Output:                                     │
-│ "Applied network changes: modified          │
-│  interface 'lan' (changed ipaddr from       │
-│  '192.168.1.1' to '192.168.2.1')"           │
-│                                             │
-│ Written to all log files                    │
-└─────────────────────────────────────────────┘
 ```
 
 ### Core Components
