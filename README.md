@@ -272,15 +272,6 @@ Wed Dec 25 15:45:20 2024 [user: admin] Applied firewall changes: added new port 
 Wed Dec 25 16:00:15 2024 [user: admin] Applied dhcp changes: added new static lease 'server' (mac=aa:bb:cc:dd:ee:ff, ip=192.168.1.100)
 ```
 
-### Authentication Events
-
-**Action:** Login attempts
-
-**Log:**
-```
-Wed Dec 25 14:15:03 2024 [user: admin] Authentication failed: login attempt from 192.168.1.50
-Wed Dec 25 14:15:25 2024 [user: admin] Authentication successful: login from 192.168.1.50
-```
 
 ---
 
