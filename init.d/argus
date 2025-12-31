@@ -1,0 +1,340 @@
+#!/bin/sh /etc/rc.common
+# ==============================================================================
+# /etc/init.d/argus - Project Argus Init Script for OpenWrt
+# ==============================================================================
+# Purpose: Service management for Project Argus audit logging daemon
+# Features: Auto-start, logging, health checks, crash recovery
+# Author: Project Argus Team
+# License: GPL-3.0
+# ==============================================================================
+
+START=99
+STOP=10
+
+USE_PROCD=1
+
+# ==============================================================================
+# CONFIGURATION
+# ==============================================================================
+
+PROG="/usr/lib/argus/logger-engine.lua"
+NAME="argus"
+PIDFILE="/var/run/argus.pid"
+
+# Log paths (will be created if missing)
+LOG_BASE_DIR="/tmp/log/Audits"
+LOG_STDERR="/tmp/log/argus-error.log"
+LOG_STDOUT="/tmp/log/argus-output.log"
+
+# Performance tuning
+RESPAWN_THRESHOLD=3600    # Restart max once per hour
+RESPAWN_TIMEOUT=5         # Wait 5 seconds before restart
+RESPAWN_RETRY=5           # Try 5 times before giving up
+
+# Environment variables for Argus
+ARGUS_LOG_DIR="${LOG_BASE_DIR}"
+ARGUS_DEBUG="${ARGUS_DEBUG:-0}"
+
+# ==============================================================================
+# HELPER FUNCTIONS
+# ==============================================================================
+
+# Create log directories with proper permissions
+setup_log_dirs() {
+	mkdir -p "${LOG_BASE_DIR}" 2>/dev/null
+	mkdir -p "$(dirname "${LOG_STDERR}")" 2>/dev/null
+
+	# Ensure logs are writable
+	touch "${LOG_STDERR}" 2>/dev/null
+	touch "${LOG_STDOUT}" 2>/dev/null
+
+	# Create default log files
+	touch "${LOG_BASE_DIR}/format.log" 2>/dev/null
+	touch "${LOG_BASE_DIR}/audit.log" 2>/dev/null
+	touch "${LOG_BASE_DIR}/debug.log" 2>/dev/null
+
+	# Set permissions
+	chmod 755 "${LOG_BASE_DIR}" 2>/dev/null
+	chmod 644 "${LOG_BASE_DIR}"/*.log 2>/dev/null
+}
+
+# Verify critical files exist
+verify_installation() {
+	if [ ! -f "${PROG}" ]; then
+		echo "ERROR: Argus logger-engine not found at ${PROG}" >&2
+		return 1
+	fi
+
+	if [ ! -x "${PROG}" ]; then
+		chmod +x "${PROG}" 2>/dev/null
+		if [ ! -x "${PROG}" ]; then
+			echo "ERROR: Cannot make ${PROG} executable" >&2
+			return 1
+		fi
+	fi
+
+	# Verify Lua is available
+	if ! command -v lua >/dev/null 2>&1; then
+		echo "ERROR: Lua interpreter not found" >&2
+		return 1
+	fi
+
+	# Verify ubus is available
+	if ! command -v ubus >/dev/null 2>&1; then
+		echo "ERROR: ubus not found - Argus requires ubus" >&2
+		return 1
+	fi
+
+	return 0
+}
+
+# Health check function
+check_health() {
+	if [ -f "${PIDFILE}" ]; then
+		local pid
+		pid=$(cat "${PIDFILE}" 2>/dev/null)
+		if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+			if [ -f "${LOG_BASE_DIR}/format.log" ]; then
+				local last_update current_time time_diff
+				last_update=$(stat -c %Y "${LOG_BASE_DIR}/format.log" 2>/dev/null || echo 0)
+				current_time=$(date +%s)
+				time_diff=$((current_time - last_update))
+
+				[ "${time_diff}" -lt 300 ] && return 0
+			fi
+			return 0
+		fi
+	fi
+	return 1
+}
+
+# Rotate logs if they get too large
+rotate_logs() {
+	local max_size=10485760  # 10MB
+
+	for log_file in "${LOG_BASE_DIR}"/*.log "${LOG_STDERR}" "${LOG_STDOUT}"; do
+		if [ -f "${log_file}" ]; then
+			local size
+			size=$(stat -c %s "${log_file}" 2>/dev/null || echo 0)
+			if [ "${size}" -gt "${max_size}" ]; then
+				local timestamp
+				timestamp=$(date +%Y%m%d-%H%M%S)
+				mv "${log_file}" "${log_file}.${timestamp}" 2>/dev/null
+				touch "${log_file}"
+				echo "$(date): Rotated ${log_file}" >> "${LOG_STDERR}"
+			fi
+		fi
+	done
+}
+
+# ==============================================================================
+# PROCD SERVICE MANAGEMENT
+# ==============================================================================
+
+start_service() {
+	echo "Starting Project Argus audit logger..."
+
+	if ! verify_installation; then
+		echo "ERROR: Installation verification failed" >&2
+		return 1
+	fi
+
+	setup_log_dirs
+	rotate_logs
+
+	procd_open_instance
+	procd_set_param command lua "${PROG}"
+	procd_set_param env ARGUS_LOG_DIR="${ARGUS_LOG_DIR}"
+	procd_set_param env ARGUS_DEBUG="${ARGUS_DEBUG}"
+	procd_set_param stderr 1
+	procd_set_param stdout 1
+	procd_set_param respawn "${RESPAWN_THRESHOLD}" "${RESPAWN_TIMEOUT}" "${RESPAWN_RETRY}"
+	procd_set_param pidfile "${PIDFILE}"
+	procd_set_param limits core="unlimited"
+	procd_set_param limits nofile="4096 4096"
+	procd_close_instance
+
+	sleep 1
+
+	if check_health; then
+		echo "Project Argus started successfully"
+		echo "$(date): Argus started" >> "${LOG_BASE_DIR}/debug.log"
+		return 0
+	else
+		echo "WARNING: Argus may not have started correctly" >&2
+		echo "$(date): Argus start verification failed" >> "${LOG_STDERR}"
+		return 1
+	fi
+}
+
+stop_service() {
+	echo "Stopping Project Argus audit logger..."
+
+	if [ -f "${LOG_BASE_DIR}/debug.log" ]; then
+		echo "$(date): Argus stopped" >> "${LOG_BASE_DIR}/debug.log"
+	fi
+
+	rm -f "${PIDFILE}" 2>/dev/null
+	echo "Project Argus stopped"
+}
+
+reload_service() {
+	echo "Reloading Project Argus..."
+	restart
+	echo "Project Argus reloaded"
+}
+
+# ==============================================================================
+# ADDITIONAL SERVICE COMMANDS
+# ==============================================================================
+
+service_triggers() {
+	procd_add_reload_trigger "argus"
+}
+
+status() {
+	if check_health; then
+		echo "Project Argus is running"
+		if [ -f "${PIDFILE}" ]; then
+			local pid
+			pid=$(cat "${PIDFILE}" 2>/dev/null)
+			[ -n "${pid}" ] && echo "  PID: ${pid}"
+		fi
+		if [ -f "${LOG_BASE_DIR}/format.log" ]; then
+			local size human_size
+			size=$(stat -c %s "${LOG_BASE_DIR}/format.log" 2>/dev/null || echo 0)
+			human_size=$(awk "BEGIN {printf \"%.2f\", ${size}/1024}")
+			echo "  Main log: ${human_size} KB"
+			echo "  Last entry: $(tail -n1 "${LOG_BASE_DIR}/format.log" 2>/dev/null | cut -c1-80)"
+		fi
+		return 0
+	else
+		echo "Project Argus is NOT running"
+		if [ -f "${LOG_STDERR}" ]; then
+			local error_count
+			error_count=$(grep -c "ERROR" "${LOG_STDERR}" 2>/dev/null || echo 0)
+			if [ "${error_count}" -gt 0 ]; then
+				echo "  Recent errors found in ${LOG_STDERR}"
+				echo "  Last error: $(grep \"ERROR\" \"${LOG_STDERR}\" | tail -n1)"
+			fi
+		fi
+		return 1
+	fi
+}
+
+logs() {
+	local lines="${1:-20}"
+	echo "=== Project Argus Logs (last ${lines} entries) ==="
+	echo ""
+
+	if [ -f "${LOG_BASE_DIR}/format.log" ]; then
+		echo "--- Human-Readable Log ---"
+		tail -n "${lines}" "${LOG_BASE_DIR}/format.log"
+		echo ""
+	fi
+
+	if [ -f "${LOG_STDERR}" ] && [ -s "${LOG_STDERR}" ]; then
+		echo "--- Error Log ---"
+		tail -n "${lines}" "${LOG_STDERR}"
+		echo ""
+	fi
+}
+
+stats() {
+	echo "=== Project Argus Statistics ==="
+	echo ""
+
+	if [ -f "${LOG_BASE_DIR}/format.log" ]; then
+		local total_entries
+		total_entries=$(wc -l < "${LOG_BASE_DIR}/format.log" 2>/dev/null || echo 0)
+		echo "Total log entries: ${total_entries}"
+	fi
+
+	if [ -f "${LOG_BASE_DIR}/audit.log" ]; then
+		local kv_entries
+		kv_entries=$(wc -l < "${LOG_BASE_DIR}/audit.log" 2>/dev/null || echo 0)
+		echo "Key-value entries: ${kv_entries}"
+	fi
+
+	if [ -d "${LOG_BASE_DIR}" ]; then
+		local disk_usage
+		disk_usage=$(du -sh "${LOG_BASE_DIR}" 2>/dev/null | cut -f1)
+		echo "Total disk usage: ${disk_usage}"
+	fi
+
+	if [ -f "${PIDFILE}" ]; then
+		local pid
+		pid=$(cat "${PIDFILE}" 2>/dev/null)
+		if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+			local start_time current_time uptime hours minutes
+			start_time=$(stat -c %Y "/proc/${pid}" 2>/dev/null || echo 0)
+			current_time=$(date +%s)
+			uptime=$((current_time - start_time))
+			hours=$((uptime / 3600))
+			minutes=$(((uptime % 3600) / 60))
+			echo "Uptime: ${hours}h ${minutes}m"
+		fi
+	fi
+}
+
+cleanup() {
+	echo "Cleaning up old Argus logs..."
+
+	if [ -d "${LOG_BASE_DIR}" ]; then
+		find "${LOG_BASE_DIR}" -name "*.log.*" -mtime +7 -delete 2>/dev/null
+		echo "Removed logs older than 7 days"
+	fi
+
+	rotate_logs
+	echo "Cleanup complete"
+}
+
+test_config() {
+	echo "Testing Project Argus configuration..."
+
+	if ! verify_installation; then
+		echo "FAILED: Installation verification failed"
+		return 1
+	fi
+
+	if ! lua -e "package.path='${PROG%/*}/?.lua;'..package.path; require('engine.config')" 2>/dev/null; then
+		echo "FAILED: Configuration syntax error"
+		return 1
+	fi
+
+	echo "PASSED: Configuration is valid"
+	return 0
+}
+
+# ==============================================================================
+# COMMAND DISPATCHER
+# ==============================================================================
+
+EXTRA_COMMANDS="status logs stats cleanup test_config"
+EXTRA_HELP="	status		Show service status and health
+	logs [N]	Show last N log entries (default: 20)
+	stats		Show statistics
+	cleanup		Remove old log files
+	test_config	Test configuration"
+
+case "$1" in
+	status)
+		status
+		;;
+	logs)
+		logs "$2"
+		;;
+	stats)
+		stats
+		;;
+	cleanup)
+		cleanup
+		;;
+	test_config)
+		test_config
+		;;
+esac
+
+# ==============================================================================
+# END OF INIT SCRIPT
+# ==============================================================================
