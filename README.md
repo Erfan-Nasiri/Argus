@@ -1,4 +1,4 @@
-# Project Argus
+#  Argus
 
 **Audit Logging for OpenWrt LuCI Operations**
 
@@ -331,7 +331,7 @@ export ARGUS_FLUSH_INTERVAL=5
 
 ## License
 
-GPL License - see LICENSE file
+GPL License - see [LICENSE](https://github.com/Erfan-Nasiri/Argus/blob/main/LICENSE) file
 
 ---
 
